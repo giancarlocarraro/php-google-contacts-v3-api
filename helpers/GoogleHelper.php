@@ -21,7 +21,8 @@ abstract class GoogleHelper
         self::$_config->refreshToken = $refreshToken;
     }
 
-    private static function loadConfig()
+    //Alow to pass differs RefreshToken on Load
+    private static function loadConfig($_RefreshToken)
     {
         if (NULL === self::$_config) {
             $configPath = __DIR__.'/../../../../.config.json';
@@ -30,7 +31,14 @@ abstract class GoogleHelper
             self::$_config = json_decode($contents);
         }
 
+        if (isset($_RefreshToken))
+        {
+            self::$_config->refreshToken = $_RefreshToken;            
+        }
+        
         return self::$_config;
+        
+        
     }
 
     public static function getClient()
