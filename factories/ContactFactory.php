@@ -7,6 +7,11 @@ use rapidweb\googlecontacts\objects\Contact;
 
 abstract class ContactFactory
 {
+    public static function initParam($_RefreshToken=null)
+    {
+        GoogleHelper::loadConfig($_RefreshToken);
+    }
+    
     public static function getAll()
     {
         $client = GoogleHelper::getClient();
