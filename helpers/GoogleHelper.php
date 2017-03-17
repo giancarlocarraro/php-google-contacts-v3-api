@@ -22,7 +22,7 @@ abstract class GoogleHelper
     }
 
     //Alow to pass differs RefreshToken on Load
-    private static function loadConfig($_RefreshToken)
+    public static function loadConfig($_RefreshToken=null)
     {
         if (NULL === self::$_config) {
             $configPath = __DIR__.'/../../../../.config.json';
