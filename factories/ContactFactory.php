@@ -12,6 +12,17 @@ abstract class ContactFactory
         GoogleHelper::loadConfig($_RefreshToken);
     }
     
+    //Function With return email of account conected
+    public static function getUserId()
+    {
+        $client = GoogleHelper::getClient();
+        $req = new \Google_Http_Request('https://www.google.com/m8/feeds/contacts/default/thin?max-results=1&updated-min=2007-03-16T00:00:00');
+        $val = $client->getAuth()->authenticatedRequest($req);
+        $response = $val->getResponseBody();        
+        $xmlContacts = simplexml_load_string($response);
+        return (string) $xmlContacts->id;
+    }
+        
     public static function getAll()
     {
         $client = GoogleHelper::getClient();
@@ -21,7 +32,6 @@ abstract class ContactFactory
         $val = $client->getAuth()->authenticatedRequest($req);
 
         $response = $val->getResponseBody();
-
         $xmlContacts = simplexml_load_string($response);
         $xmlContacts->registerXPathNamespace('gd', 'http://schemas.google.com/g/2005');
 
@@ -47,7 +57,7 @@ abstract class ContactFactory
                 }
             }
 
-            $contactGDNodes = $xmlContactsEntry->children('http://schemas.google.com/g/2005');
+            $contactGDNodes = $xmlContactsEntry->children('http://schemas.google.com/g/2005');            
             foreach ($contactGDNodes as $key => $value) {
                 switch ($key) {
                     case 'organization':
@@ -66,6 +76,70 @@ abstract class ContactFactory
                         $type = substr(strstr($attributes['rel'], '#'), 1);
                         //$e164 = substr(strstr($uri, ':'), 1);
                         $contactDetails[$key][] = ['type' => $type, 'number' => $value->__toString()];
+                        break;
+                    default:
+                        $contactDetails[$key] = (string) $value;
+                        break;
+                }
+            }
+
+            $contactsArray[] = new Contact($contactDetails);
+        }
+
+        return $contactsArray;
+    }
+    
+    //New function with return only name, email, phonenumber, organization name,  
+    //selfURL, editURL(sufix)
+    //obs: editURL = selfURL + editURL(sufix)
+    public static function getAllSimple()
+    {
+        $client = GoogleHelper::getClient();
+
+        $req = new \Google_Http_Request('https://www.google.com/m8/feeds/contacts/default/full?max-results=10000&updated-min=2007-03-16T00:00:00');
+
+        $val = $client->getAuth()->authenticatedRequest($req);
+
+        $response = $val->getResponseBody();
+        $xmlContacts = simplexml_load_string($response);
+        $xmlContacts->registerXPathNamespace('gd', 'http://schemas.google.com/g/2005');
+
+        $contactsArray = array();
+
+        foreach ($xmlContacts->entry as $xmlContactsEntry) {
+            $contactDetails = array();
+            //$contactDetails['id'] = (string) $xmlContactsEntry->id;
+            $contactDetails['name'] = (string) $xmlContactsEntry->title;
+            foreach ($xmlContactsEntry->children() as $key => $value) {
+                $attributes = $value->attributes();
+                if ($key == 'link') {
+                    if ($attributes['rel'] == 'edit') {
+                        $contactDetails['editURL'] = (string) $attributes['href'];
+                    } elseif ($attributes['rel'] == 'self') {
+                        $contactDetails['selfURL'] = (string) $attributes['href'];
+                    }
+//                    } elseif ($attributes['rel'] == 'http://schemas.google.com/contacts/2008/rel#edit-photo') {
+//                        $contactDetails['photoURL'] = (string) $attributes['href'];
+//                    }
+                }
+            }
+            $contactDetails['editURL'] = substr($contactDetails['editURL'], strlen($contactDetails['selfURL']));
+            
+            
+            $contactGDNodes = $xmlContactsEntry->children('http://schemas.google.com/g/2005');            
+            foreach ($contactGDNodes as $key => $value) {
+                switch ($key) {
+                    case 'organization':
+                        $contactDetails[$key] = (string) $value->orgName;                        
+                        break;
+                    case 'email':
+                        $attributes = $value->attributes();
+                        $emailadress = (string) $attributes['address'];
+                        $contactDetails[$key] = $emailadress;
+                        break;
+                    case 'phoneNumber':
+                        $attributes = $value->attributes();
+                        $contactDetails[$key] = $value->__toString();
                         break;
                     default:
                         $contactDetails[$key] = (string) $value;
@@ -142,6 +216,8 @@ abstract class ContactFactory
         return new Contact($contactDetails);
     }
 
+    //update data of contact, 
+    //append phoneNumber, organizationName possibility of update in function
     public static function submitUpdates(Contact $updatedContact)
     {
         $client = GoogleHelper::getClient();
@@ -160,18 +236,61 @@ abstract class ContactFactory
         $xmlContactsEntry->title = $updatedContact->name;
 
         $contactGDNodes = $xmlContactsEntry->children('http://schemas.google.com/g/2005');
-
+       
+        //variables control of optional data of contact
+        $v_SetPhone = false;
+        $v_SetOrganization = false;
+        $v_SetOrgName = false;
         foreach ($contactGDNodes as $key => $value) {
             $attributes = $value->attributes();
-
             if ($key == 'email') {
-                $attributes['address'] = $updatedContact->email;
-            } else {
+                $attributes['address'] = $updatedContact->email;                            
+            } else if ($key == 'phoneNumber') { 
+                $v_SetPhone = true;
+                if (!is_null($updatedContact->phoneNumber) && $updatedContact->phoneNumber != '')
+                { 
+                    $value[0] = $updatedContact->phoneNumber;                     
+                }
+            } else if ($key == 'organization') {                 
+                $v_SetOrganization = true;                   
+                foreach ( $value->children('http://schemas.google.com/g/2005') as $key2 => $value2)
+                {
+                    if ($key2 == 'orgName') {                        
+                        $v_SetOrgName = true;
+                        $value2[0] = $updatedContact->organization; 
+                    }
+                }
+                if (!$v_SetOrgName && !is_null($updatedContact->organization))
+                {
+                    $v_SetOrgName = true;
+                    $value->addChild('orgName', $updatedContact->organization, 'http://schemas.google.com/g/2005');
+                }
+                
+            }
+            else {
                 $xmlContactsEntry->$key = $updatedContact->$key;
                 $attributes['uri'] = '';
             }
         }
+        
+         
+        if (!$v_SetPhone && !is_null($updatedContact->phoneNumber) && $updatedContact->phoneNumber != '')
+        {            
+            $v_child = $xmlContactsEntry->addChild('phoneNumber', $updatedContact->phoneNumber, 'http://schemas.google.com/g/2005');
+            $v_child->addAttribute('rel', 'http://schemas.google.com/g/2005#work');            
+        }
 
+        if (!$v_SetOrgName && !is_null($updatedContact->organization))
+        {   
+            $v_child = $xmlContactsEntry->addChild('organization', null, 'http://schemas.google.com/g/2005');
+            $v_child->addAttribute('rel', 'http://schemas.google.com/g/2005#work');
+            
+            if (!$v_SetOrgName)
+            {
+                $v_child->addChild('orgName', $updatedContact->organization, 'http://schemas.google.com/g/2005');                
+            }            
+        }        
+        
         $updatedXML = $xmlContactsEntry->asXML();
 
         $req = new \Google_Http_Request($updatedContact->editURL);
@@ -181,7 +300,7 @@ abstract class ContactFactory
 
         $val = $client->getAuth()->authenticatedRequest($req);
 
-        $response = $val->getResponseBody();
+        $response = $val->getResponseBody();        
 
         $xmlContact = simplexml_load_string($response);
         $xmlContact->registerXPathNamespace('gd', 'http://schemas.google.com/g/2005');
@@ -209,7 +328,9 @@ abstract class ContactFactory
 
         foreach ($contactGDNodes as $key => $value) {
             $attributes = $value->attributes();
-
+            if ($key == 'organization') {
+                $contactDetails[$key] = (string) $value->orgName;
+            } else 
             if ($key == 'email') {
                 $contactDetails[$key] = (string) $attributes['address'];
             } else {
@@ -220,7 +341,8 @@ abstract class ContactFactory
         return new Contact($contactDetails);
     }
 
-    public static function create($name, $phoneNumber, $emailAddress)
+    //add organizationName information in creation of contact
+    public static function create($name, $phoneNumber, $emailAddress, $organization = null)
     {
         $doc = new \DOMDocument();
         $doc->formatOutput = true;
@@ -238,12 +360,24 @@ abstract class ContactFactory
         $email->setAttribute('address', $emailAddress);
         $entry->appendChild($email);
 
+        if (!is_null($phoneNumber) && $phoneNumber != '')
+        {
         $contact = $doc->createElement('gd:phoneNumber', $phoneNumber);
         $contact->setAttribute('rel', 'http://schemas.google.com/g/2005#work');
         $entry->appendChild($contact);
+        }
 
+        if (!is_null($organization))
+        {            
+            $orgname = $doc->createElement('gd:orgName', $organization); 
+            $contact = $doc->createElement('gd:organization', '');
+            $contact->setAttribute('rel', 'http://schemas.google.com/g/2005#other');  
+            $contact->appendChild($orgname);
+            $entry->appendChild($contact);
+        }
+        
+        
         $xmlToSend = $doc->saveXML();
-
         $client = GoogleHelper::getClient();
 
         $req = new \Google_Http_Request('https://www.google.com/m8/feeds/contacts/default/full');
@@ -253,8 +387,7 @@ abstract class ContactFactory
 
         $val = $client->getAuth()->authenticatedRequest($req);
 
-        $response = $val->getResponseBody();
-
+        $response = $val->getResponseBody();        
         $xmlContact = simplexml_load_string($response);
         $xmlContact->registerXPathNamespace('gd', 'http://schemas.google.com/g/2005');
 
@@ -281,7 +414,9 @@ abstract class ContactFactory
 
         foreach ($contactGDNodes as $key => $value) {
             $attributes = $value->attributes();
-
+            if ($key == 'organization') {
+                $contactDetails[$key] = (string) $value->orgName;
+            } else 
             if ($key == 'email') {
                 $contactDetails[$key] = (string) $attributes['address'];
             } else {
